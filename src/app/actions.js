@@ -1,5 +1,15 @@
 "use server";
 
+// --- YARDIMCI: Crossref Yazar Temizleyici ---
+function formatCrossrefAuthors(authorsList) {
+  if (!authorsList || !Array.isArray(authorsList)) return "";
+  return authorsList.map(a => {
+    const given = a.given || "";
+    const family = a.family || "";
+    return `${given} ${family}`.trim();
+  }).join(", ");
+}
+
 // --- MAKALE (DOI) İÇİN ---
 export async function fetchDoiData(doi) {
   try {
@@ -12,10 +22,10 @@ export async function fetchDoiData(doi) {
   }
 }
 
-// --- KİTAP (ISBN) İÇİN (ÇİFT MOTORLU SİSTEM) ---
+// --- KİTAP (ISBN) İÇİN (3 MOTORLU SİSTEM: Google -> OpenLib -> Crossref) ---
 export async function fetchBookData(isbn) {
   try {
-    // 1. Önce Google Books'a sor
+    // 1. MOTOR: Google Books
     const googleRes = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
     const googleData = await googleRes.json();
 
@@ -33,7 +43,7 @@ export async function fetchBookData(isbn) {
       };
     }
 
-    // 2. Google bulamazsa Open Library'ye sor
+    // 2. MOTOR: Open Library
     const openLibRes = await fetch(`https://openlibrary.org/search.json?isbn=${isbn}`);
     const openLibData = await openLibRes.json();
 
@@ -51,7 +61,35 @@ export async function fetchBookData(isbn) {
       };
     }
 
-    return { success: false, error: "Kitap veritabanlarında bulunamadı." };
+    // 3. MOTOR: Crossref (Akademik Kitaplar İçin Son Çare)
+    // ISBN'i bir sorgu olarak atıyoruz ve tipi 'book' (kitap) olsun diyoruz.
+    const crossRes = await fetch(`https://api.crossref.org/works?query=${isbn}&filter=type:book&mailto=academic@example.com`);
+    const crossData = await crossRes.json();
+
+    if (crossData.message && crossData.message.items.length > 0) {
+      const item = crossData.message.items[0];
+      
+      // Tarih verisini bulmaya çalış (Yayın yılı veya Oluşturulma yılı)
+      let year = "";
+      if (item['published-print']) {
+        year = item['published-print']['date-parts'][0][0];
+      } else if (item.created) {
+        year = item.created['date-parts'][0][0];
+      }
+
+      return {
+        success: true,
+        source: 'crossref',
+        data: {
+          title: item.title ? item.title[0] : "",
+          authors: formatCrossrefAuthors(item.author),
+          publisher: item.publisher || "",
+          year: String(year)
+        }
+      };
+    }
+
+    return { success: false, error: "Kitap hiçbir veritabanında bulunamadı." };
 
   } catch (error) {
     return { success: false, error: error.message };
