@@ -24,7 +24,6 @@ export default function Home() {
   // --- AKILLI METİN DÜZELTİCİLER ---
 
   // 1. Başlıkları ve İsimleri Düzeltir (Title Case)
-  // Örn: "YÜKSEKÖĞRETİM" -> "Yükseköğretim", "mehmet" -> "Mehmet"
   const cleanText = (text) => {
     if (!text) return "";
     let clean = text.trim().replace(/\.$/, ""); // Sondaki noktayı sil
@@ -32,8 +31,8 @@ export default function Home() {
     return clean.split(" ")
       .map(word => {
         const lower = word.toLocaleLowerCase('tr-TR');
-        // Bağlaçları küçük bırak (İstersen buraya 've', 'ile' ekleyebilirsin)
-        if (['ve', 'ile', 'de', 'da', 'and', 'of', 'the'].includes(lower)) {
+        // Bağlaçları küçük bırak
+        if (['ve', 'ile', 'de', 'da', 'and', 'of', 'the', 'in', 'for', 'on'].includes(lower)) {
           return lower; 
         }
         return word.charAt(0).toLocaleUpperCase('tr-TR') + word.slice(1).toLocaleLowerCase('tr-TR');
@@ -59,6 +58,7 @@ export default function Home() {
       }).join(", ");
     }
 
+    // Tekil String geldiyse
     return cleanText(authorsData);
   };
 
@@ -88,13 +88,16 @@ export default function Home() {
     } catch (err) { alert("Hata: " + err.message); }
   };
 
-  // --- DOI ARAMA (CrossRef) ---
+  // --- DOI ARAMA (CrossRef - GÜNCELLENMİŞ VERSİYON) ---
   const searchDOI = async () => {
     try {
-      // DOI linki yapıştırılırsa temizle, sadece kodu al
+      // 1. DOI Temizliği
       const cleanDoi = inputValue.replace("https://doi.org/", "").trim();
+      const encodedDoi = encodeURIComponent(cleanDoi);
+
+      // 2. API İsteği (Vercel hatasını çözen kısım: mailto ekledik)
+      const res = await fetch(`https://api.crossref.org/works/${encodedDoi}?mailto=academic@example.com`);
       
-      const res = await fetch(`https://api.crossref.org/works/${cleanDoi}`);
       if (!res.ok) throw new Error("Makale bulunamadı");
       
       const data = await res.json();
@@ -102,9 +105,9 @@ export default function Home() {
 
       setFormData({
         ...formData,
-        type: "article", // Türü makaleye zorla
+        type: "article",
         title: cleanText(item.title ? item.title[0] : ""),
-        authors: cleanAuthors(item.author), // İsimleri düzelt
+        authors: cleanAuthors(item.author),
         journal: cleanText(item['container-title'] ? item['container-title'][0] : ""),
         volume: item.volume || "",
         issue: item.issue || "",
@@ -114,7 +117,10 @@ export default function Home() {
       });
       setResult(null);
 
-    } catch (err) { alert("DOI bulunamadı veya hatalı."); }
+    } catch (err) { 
+      console.error(err);
+      alert("DOI bulunamadı veya hatalı giriş yapıldı."); 
+    }
   };
 
   // Hangi butona basılacağını seçen fonksiyon
@@ -189,6 +195,7 @@ export default function Home() {
             <div>
               <label className="text-xs font-bold text-gray-500 uppercase ml-1">Yazar</label>
               <input name="authors" value={formData.authors} onChange={handleChange} className="w-full mt-1 p-3 border rounded-lg bg-gray-50 focus:bg-white focus:border-black outline-none transition" />
+              <p className="text-[10px] text-gray-400 mt-1 ml-1">Birden fazla yazar için virgül kullanın: Ad Soyad, Ad Soyad</p>
             </div>
             <div>
               <label className="text-xs font-bold text-gray-500 uppercase ml-1">
