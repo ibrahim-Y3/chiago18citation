@@ -1,15 +1,15 @@
 "use client";
 import { useState } from "react";
 import { formatChicago18 } from "@/utils/chicagoFormatter";
+import { fetchDoiData, fetchBookData } from "./actions"; // fetchBookData eklendi
 
 export default function Home() {
-  const [inputValue, setInputValue] = useState(""); // Hem ISBN hem DOI buraya yazılır
+  const [inputValue, setInputValue] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
 
-  // Form Verileri
   const [formData, setFormData] = useState({
-    type: "book", // 'book' veya 'article'
+    type: "book",
     authors: "",
     title: "",
     publisher: "",
@@ -21,17 +21,14 @@ export default function Home() {
     doi: ""
   });
 
-  // --- AKILLI METİN DÜZELTİCİLER ---
-
-  // 1. Başlıkları ve İsimleri Düzeltir (Title Case)
+  // --- TEMİZLİK FONKSİYONLARI ---
   const cleanText = (text) => {
     if (!text) return "";
-    let clean = text.trim().replace(/\.$/, ""); // Sondaki noktayı sil
+    let clean = String(text).trim().replace(/\.$/, ""); // String'e çevir (sayı gelirse patlamasın)
     
     return clean.split(" ")
       .map(word => {
         const lower = word.toLocaleLowerCase('tr-TR');
-        // Bağlaçları küçük bırak
         if (['ve', 'ile', 'de', 'da', 'and', 'of', 'the', 'in', 'for', 'on'].includes(lower)) {
           return lower; 
         }
@@ -40,68 +37,79 @@ export default function Home() {
       .join(" ");
   };
 
-  // 2. Yazar Listesini Düzeltir
   const cleanAuthors = (authorsData) => {
     if (!authorsData) return "";
+    
+    // Gelen veri zaten string ise direkt temizle
+    if (typeof authorsData === 'string') return cleanText(authorsData);
 
-    // Google Books'tan gelen veri (Array of Strings)
-    if (Array.isArray(authorsData) && typeof authorsData[0] === 'string') {
-      return authorsData.map(a => cleanText(a)).join(", ");
+    // Array ise
+    if (Array.isArray(authorsData)) {
+      if (typeof authorsData[0] === 'string') {
+        return authorsData.map(a => cleanText(a)).join(", ");
+      }
+      if (typeof authorsData[0] === 'object') {
+        return authorsData.map(a => {
+          const given = cleanText(a.given || "");
+          const family = cleanText(a.family || "");
+          return `${given} ${family}`;
+        }).join(", ");
+      }
     }
-
-    // Crossref (DOI)'den gelen veri (Array of Objects)
-    if (Array.isArray(authorsData) && typeof authorsData[0] === 'object') {
-      return authorsData.map(a => {
-        const given = cleanText(a.given || "");
-        const family = cleanText(a.family || "");
-        return `${given} ${family}`;
-      }).join(", ");
-    }
-
-    // Tekil String geldiyse
-    return cleanText(authorsData);
+    return "";
   };
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  // --- ISBN ARAMA (Google Books) ---
+  // --- ISBN ARAMA (ARTIK SERVER ACTION & ÇİFT MOTORLU) ---
   const searchISBN = async () => {
     try {
-      const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${inputValue}`);
-      const data = await res.json();
-      if (data.totalItems > 0) {
-        const info = data.items[0].volumeInfo;
-        setFormData({
-          ...formData,
-          type: "book",
-          title: cleanText(info.title || ""),
-          authors: cleanAuthors(info.authors),
-          publisher: cleanText(info.publisher || ""),
-          year: info.publishedDate ? info.publishedDate.substring(0, 4) : "",
-        });
-        setResult(null);
-      } else {
-        alert("Kitap bulunamadı!");
+      // 1. Tireleri temizle (978-605... -> 978605...)
+      const cleanIsbn = inputValue.replace(/-/g, "").trim();
+
+      // 2. Sunucuya sor (Google + Open Library)
+      const response = await fetchBookData(cleanIsbn);
+      
+      if (!response.success) {
+        throw new Error(response.error);
       }
-    } catch (err) { alert("Hata: " + err.message); }
+
+      const info = response.data;
+      
+      setFormData({
+        ...formData,
+        type: "book",
+        title: cleanText(info.title || ""),
+        authors: cleanAuthors(info.authors),
+        publisher: cleanText(info.publisher || ""),
+        year: info.year ? String(info.year) : "", // Yıl sayı gelebilir, stringe çevir
+      });
+      setResult(null);
+
+    } catch (err) { 
+      console.error(err);
+      alert("Hata: " + err.message); 
+    }
   };
 
-  // --- DOI ARAMA (CrossRef - GÜNCELLENMİŞ VERSİYON) ---
+  // --- DOI ARAMA ---
   const searchDOI = async () => {
     try {
-      // 1. DOI Temizliği
-      const cleanDoi = inputValue.replace("https://doi.org/", "").trim();
-      const encodedDoi = encodeURIComponent(cleanDoi);
+      const cleanDoi = inputValue
+        .replace("https://doi.org/", "")
+        .replace("http://doi.org/", "")
+        .trim()
+        .replace(/\.$/, "");
 
-      // 2. API İsteği (Vercel hatasını çözen kısım: mailto ekledik)
-      const res = await fetch(`https://api.crossref.org/works/${encodedDoi}?mailto=academic@example.com`);
+      const response = await fetchDoiData(cleanDoi);
       
-      if (!res.ok) throw new Error("Makale bulunamadı");
+      if (!response.success) {
+        throw new Error(response.error);
+      }
       
-      const data = await res.json();
-      const item = data.message;
+      const item = response.data;
 
       setFormData({
         ...formData,
@@ -119,11 +127,10 @@ export default function Home() {
 
     } catch (err) { 
       console.error(err);
-      alert("DOI bulunamadı veya hatalı giriş yapıldı."); 
+      alert("Hata: DOI bulunamadı. Lütfen numaranın sonunda nokta olmadığından emin olun."); 
     }
   };
 
-  // Hangi butona basılacağını seçen fonksiyon
   const handleSearch = async () => {
     if (!inputValue) return alert("Lütfen kod giriniz.");
     setLoading(true);
@@ -147,7 +154,7 @@ export default function Home() {
         <h1 className="text-3xl font-bold text-center mb-2">Chicago 18. Edisyon</h1>
         <p className="text-center text-gray-500 mb-8 text-sm">ISBN ve DOI Destekli Atıf Aracı</p>
 
-        {/* --- TÜR SEÇİMİ (TABLAR) --- */}
+        {/* --- TÜR SEÇİMİ --- */}
         <div className="flex bg-gray-100 p-1 rounded-lg mb-6">
           <button 
             onClick={() => { setFormData({...formData, type: "book"}); setInputValue(""); setResult(null); }}
@@ -163,7 +170,7 @@ export default function Home() {
           </button>
         </div>
 
-        {/* --- ARAMA KUTUSU (DİNAMİK) --- */}
+        {/* --- ARAMA KUTUSU --- */}
         <div className={`p-6 rounded-xl border mb-8 transition-colors ${formData.type === 'book' ? 'bg-blue-50 border-blue-100' : 'bg-orange-50 border-orange-100'}`}>
           <label className={`block text-xs font-bold uppercase mb-2 ${formData.type === 'book' ? 'text-blue-800' : 'text-orange-800'}`}>
             {formData.type === 'book' ? 'ISBN GİRİNİZ' : 'DOI GİRİNİZ'}
@@ -171,7 +178,7 @@ export default function Home() {
           <div className="flex gap-2">
             <input 
               type="text" 
-              placeholder={formData.type === 'book' ? "Örn: 9789750719387" : "Örn: 10.1080/00263206.2024.123456"} 
+              placeholder={formData.type === 'book' ? "Örn: 9786055541323" : "Örn: 10.1080/..."} 
               className="flex-1 p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 bg-white"
               style={{ focusRingColor: formData.type === 'book' ? '#3b82f6' : '#f97316' }}
               value={inputValue}
@@ -188,14 +195,12 @@ export default function Home() {
           </div>
         </div>
 
-        {/* --- FORM ALANLARI --- */}
+        {/* --- FORM --- */}
         <div className="space-y-4">
-          
           <div className="grid grid-cols-1 gap-4">
             <div>
               <label className="text-xs font-bold text-gray-500 uppercase ml-1">Yazar</label>
               <input name="authors" value={formData.authors} onChange={handleChange} className="w-full mt-1 p-3 border rounded-lg bg-gray-50 focus:bg-white focus:border-black outline-none transition" />
-              <p className="text-[10px] text-gray-400 mt-1 ml-1">Birden fazla yazar için virgül kullanın: Ad Soyad, Ad Soyad</p>
             </div>
             <div>
               <label className="text-xs font-bold text-gray-500 uppercase ml-1">
@@ -205,7 +210,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* KİTAP ALANLARI */}
           {formData.type === 'book' && (
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -219,7 +223,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* MAKALE ALANLARI */}
           {formData.type === 'article' && (
             <>
               <div>
